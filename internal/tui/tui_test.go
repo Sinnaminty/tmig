@@ -253,4 +253,16 @@ func TestSmallTerminalBlocksHiddenEdits(t *testing.T) {
 	if len(term.tasks()) != 1 {
 		t.Fatal("resizing did not restore interaction")
 	}
+	term.screen.SetSize(132, 32)
+	term.u.app.ForceDraw()
+	if !term.u.wide || !strings.Contains(term.rendered(), "DUE DATE") {
+		t.Fatal("wide terminal did not show task details beside the list")
+	}
+	term.text("e")
+	term.key(tcell.KeyEscape, 0)
+	term.screen.SetSize(76, 24)
+	term.u.app.ForceDraw()
+	if selected, ok := term.u.selected(); !ok || selected.Title != "Resized" || term.u.wide {
+		t.Fatal("switching layouts lost the selection or keyboard focus")
+	}
 }

@@ -86,8 +86,11 @@ closes an open dropdown first). Blank due dates remove the deadline. Invalid
 input stays in the form with an error so you can correct it. Canceling a form
 discards its unsaved changes. CSV export remains available via `tmig export`.
 
-The selected task's title also appears below the table. New or edited tasks may
-be hidden by the current filters; choose `all` in the filters form to see them.
+The selected task's details appear beside the table in wide terminals and below
+it in narrower ones. The workspace stays centered on larger screens. Status and
+priority use distinct colors, and the header summarizes the tasks in the current
+view. New or edited tasks may be hidden by the current filters; choose `all` in
+the filters form to see them.
 
 ## Storage
 
