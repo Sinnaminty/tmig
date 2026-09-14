@@ -121,6 +121,7 @@ func TestInvalidCommandsPreserveTasks(t *testing.T) {
 		args          []string
 	}{
 		{"unknown command", "unknown command", []string{"unknown"}},
+		{"extra TUI argument", "positional", []string{"tui", "extra"}},
 		{"unknown global flag", "flag", []string{"--unknown"}},
 		{"unknown command flag", "flag", []string{"add", "Task", "--unknown"}},
 		{"missing flag value", "needs an argument", []string{"list", "--sort"}},
@@ -160,7 +161,7 @@ func TestInvalidCommandsPreserveTasks(t *testing.T) {
 func TestHelpDoesNotOpenDatabase(t *testing.T) {
 	t.Parallel()
 	db := filepath.Join(t.TempDir(), "missing", "tasks.db")
-	for _, args := range [][]string{nil, {"help"}, {"--help"}, {"add", "--help"}, {"list", "--help"}, {"update", "--help"}, {"complete", "--help"}, {"delete", "--help"}, {"export", "--help"}} {
+	for _, args := range [][]string{nil, {"help"}, {"--help"}, {"add", "--help"}, {"list", "--help"}, {"update", "--help"}, {"complete", "--help"}, {"delete", "--help"}, {"export", "--help"}, {"tui", "--help"}} {
 		out, errOut, err := run(db, args...)
 		if err != nil || !strings.Contains(out+errOut, "Usage:") {
 			t.Errorf("help %q: output %q, error %v", args, out+errOut, err)

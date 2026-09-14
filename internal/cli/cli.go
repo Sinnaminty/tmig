@@ -14,6 +14,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/Sinnaminty/tmig/internal/task"
+	"github.com/Sinnaminty/tmig/internal/tui"
 )
 
 const help = `tmig — Task Manager In Go
@@ -21,6 +22,7 @@ const help = `tmig — Task Manager In Go
 Usage: tmig [--db PATH] COMMAND [OPTIONS]
 
 Commands:
+  tui     Open the interactive terminal interface
   add [--due YYYY-MM-DD] [--priority low|medium|high] "TITLE"
   list [--status all|pending|complete] [--priority low|medium|high] [--sort id|due|priority]
   update [--title TEXT] [--due YYYY-MM-DD] [--priority LEVEL] [--status STATUS] ID
@@ -69,7 +71,7 @@ func Run(args []string, out, errOut io.Writer) error {
 		if command == "export" {
 			fs.StringVar(&output, "output", "tasks.csv", "new CSV file path (must not already exist)")
 		}
-	case "complete", "delete":
+	case "complete", "delete", "tui":
 	default:
 		return fmt.Errorf("unknown command %q; run tmig --help", command)
 	}
@@ -124,6 +126,8 @@ func Run(args []string, out, errOut io.Writer) error {
 	}
 	defer store.Close()
 	switch command {
+	case "tui":
+		return tui.Run(store)
 	case "add":
 		id, err := store.Add(fs.Arg(0), due, priority)
 		if err != nil {

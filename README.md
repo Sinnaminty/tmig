@@ -1,6 +1,7 @@
 # tmig — Task Manager In Go
 
-A small Go command-line task manager backed by SQLite. Add tasks, set priorities
+A small Go task manager with command-line and interactive terminal interfaces,
+backed by SQLite. Add tasks, set priorities
 and due dates, track completion, filter and sort your list, and export it to CSV.
 
 ## Getting started
@@ -55,6 +56,39 @@ For a title starting with a dash, use `tmig add -- "- my task"`.
   software, import the title column as text to preserve literal values.
 - Invalid commands or failed operations return a nonzero exit code.
 
+## Interactive terminal interface
+
+```sh
+tmig tui
+# Or try it with a separate database:
+tmig --db ./demo.db tui
+```
+
+The TUI uses the same database and validation rules as the CLI. Changes are saved
+immediately; filters and sorting last only for the current TUI session. Use a
+terminal at least 76 columns wide and 24 rows tall.
+
+| Key | Action |
+| --- | --- |
+| Up / Down | Select a task |
+| `a` | Add a task |
+| Enter / `e` | Edit the selected task's title, due date, and priority |
+| Space | Complete or reopen the selected task |
+| `d` | Delete the selected task after confirmation (Cancel is selected first) |
+| `f` | Choose status/priority filters and sort order |
+| `r` | Reload tasks, including changes made through another CLI invocation |
+| `q` | Quit from the task list |
+| Ctrl-C | Quit from anywhere |
+
+In forms, use Tab / Shift-Tab to move, Enter to open a dropdown or activate a
+button, and Up / Down to choose dropdown options. Escape cancels the form (or
+closes an open dropdown first). Blank due dates remove the deadline. Invalid
+input stays in the form with an error so you can correct it. Canceling a form
+discards its unsaved changes. CSV export remains available via `tmig export`.
+
+The selected task's title also appears below the table. New or edited tasks may
+be hidden by the current filters; choose `all` in the filters form to see them.
+
 ## Storage
 
 By default, the database is `tmig/tasks.db` inside the operating system's user
@@ -77,21 +111,23 @@ are excluded from Git.
 
 This is a local, single-user application. Go's standard `flag` package handles
 arguments, `database/sql` and [modernc.org/sqlite](https://pkg.go.dev/modernc.org/sqlite)
-provide persistence, and `encoding/csv` handles export escaping.
+provide persistence, `encoding/csv` handles export escaping, and
+[tview](https://github.com/rivo/tview) provides terminal tables, forms, and dialogs.
 
-The code is split into three small pieces:
+The code is split into four small pieces:
 
 - `main.go`: prints errors and sets the process exit status.
 - `internal/cli`: parses commands and formats terminal and CSV output.
 - `internal/task`: stores tasks, validates task fields, and performs SQL queries.
+- `internal/tui`: presents the interactive task list and handles keyboard actions.
 
 SQL values are parameterized, and sort expressions come from a fixed set.
 Updates run in a single statement, so invalid input cannot leave a partially
 updated task. Database constraints reinforce the allowed status and priority
 values. An SQLite busy timeout allows brief competing writes to finish.
 
-The task package has no terminal dependencies, allowing the planned TUI to reuse
-the same operations. There is no ORM, web server, or separate database service.
+The task package has no terminal dependencies. Both interfaces use its operations
+and validation rules. There is no ORM, web server, or separate database service.
 
 ## Development milestones
 
@@ -101,10 +137,8 @@ the same operations. There is no ORM, web server, or separate database service.
    command parsing, CSV exports, and process exit behavior.
 3. **Bonus validation:** review and expand edge-case handling. Basic field
    validation is already implemented and covered by automated tests.
-4. **Bonus TUI:** add an interactive terminal interface with task navigation,
-   creation, editing, completion, deletion, filtering, and clear validation errors.
-
-The TUI is not implemented yet.
+4. **Bonus TUI (implemented):** interactive task navigation, creation, editing,
+   completion, deletion confirmation, filtering, sorting, and validation errors.
 
 ## Automated tests
 
@@ -126,6 +160,9 @@ automatically. Tests do not use your normal task database.
   help, error reporting, CSV contents and escaping, and overwrite protection.
 - `main_test.go` runs the application entry point in subprocesses to check exit
   codes, stdout/stderr, and persistence between invocations.
+- `internal/tui/tui_test.go` sends keyboard events through the interface on a
+  simulated terminal to check forms, validation, cancellation, completion,
+  deletion confirmation, filters, selection, refresh, and terminal resizing.
 
 The default storage location test uses Linux's `XDG_CONFIG_HOME` and is skipped
 on other operating systems. The other tests use explicit temporary database
@@ -157,3 +194,11 @@ normal task list. Each command starts a new process, which also checks persisten
 - [ ] Delete a task; confirm it is absent and deleting it again reports an error.
 - [ ] Add another task; confirm a deleted ID is not reused.
 - [ ] Repeat with a second `--db` path; confirm the task lists stay separate.
+- [ ] Launch `tui`, add/edit a task, and correct an invalid due date without
+      retyping the title.
+- [ ] Complete/reopen tasks, apply filters/sorting, and refresh after a CLI change.
+- [ ] Cancel a form and a deletion; confirm the task remains unchanged. Then
+      confirm a deletion and inspect the list.
+- [ ] Resize below 76 x 24 and back; confirm the resize message and restored UI.
+- [ ] Quit with `q` or Ctrl-C; confirm the terminal is restored and CLI commands
+      see the changes saved in the TUI.
