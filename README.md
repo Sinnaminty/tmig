@@ -97,13 +97,40 @@ the same operations. There is no ORM, web server, or separate database service.
 
 1. **Required CLI basics (implemented):** CRUD, completion, due dates, priorities,
    filtering, sorting, SQLite persistence, and CSV export.
-2. **Bonus tests and validation:** add unit and integration tests for task
-   operations, command parsing, and exports; expand edge-case validation checks.
-   Basic field validation is already included in the CLI milestone.
-3. **Bonus TUI:** add an interactive terminal interface with task navigation,
+2. **Bonus automated tests (implemented):** test task operations with real SQLite,
+   command parsing, CSV exports, and process exit behavior.
+3. **Bonus validation:** review and expand edge-case handling. Basic field
+   validation is already implemented and covered by automated tests.
+4. **Bonus TUI:** add an interactive terminal interface with task navigation,
    creation, editing, completion, deletion, filtering, and clear validation errors.
 
-The TUI and automated test suite are not implemented yet.
+The TUI is not implemented yet.
+
+## Automated tests
+
+```sh
+go test ./...
+go test ./... -cover
+go test -race -shuffle=on ./...
+go vet ./...
+```
+
+The suite uses Go's standard `testing` package with no additional dependencies.
+SQLite databases and exports are created in temporary directories and cleaned up
+automatically. Tests do not use your normal task database.
+
+- `internal/task/store_test.go` checks persistence after reopening, validation,
+  filters, sorting and tie order, partial updates, completion/reopening, deletion,
+  and errors that must leave existing data intact.
+- `internal/cli/cli_test.go` checks command syntax, defaults, database selection,
+  help, error reporting, CSV contents and escaping, and overwrite protection.
+- `main_test.go` runs the application entry point in subprocesses to check exit
+  codes, stdout/stderr, and persistence between invocations.
+
+The default storage location test uses Linux's `XDG_CONFIG_HOME` and is skipped
+on other operating systems. The other tests use explicit temporary database
+paths or `TMIG_DB`. The optional race detector requires a supported platform and
+a C compiler, even though the normal application build does not.
 
 ## Manual testing checklist
 
@@ -130,5 +157,3 @@ normal task list. Each command starts a new process, which also checks persisten
 - [ ] Delete a task; confirm it is absent and deleting it again reports an error.
 - [ ] Add another task; confirm a deleted ID is not reused.
 - [ ] Repeat with a second `--db` path; confirm the task lists stay separate.
-
-When the bonus test suite lands, `go test ./...` will run it.
