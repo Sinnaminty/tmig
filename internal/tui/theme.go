@@ -38,6 +38,8 @@ func styleForm(form *tview.Form) {
 		switch item := form.GetFormItem(index).(type) {
 		case *tview.InputField:
 			item.SetBackgroundColor(color(panel))
+		case *tview.TextArea:
+			item.SetBackgroundColor(color(panel))
 		case *tview.DropDown:
 			item.SetBackgroundColor(color(panel))
 		}

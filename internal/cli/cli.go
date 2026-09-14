@@ -23,9 +23,10 @@ Usage: tmig [--db PATH] COMMAND [OPTIONS]
 
 Commands:
   tui     Open the interactive terminal interface
-  add [--due YYYY-MM-DD] [--priority low|medium|high] "TITLE"
+  add [--description TEXT] [--due YYYY-MM-DD] [--priority low|medium|high] "TITLE"
+  show ID
   list [--status all|pending|complete] [--priority low|medium|high] [--sort id|due|priority]
-  update [--title TEXT] [--due YYYY-MM-DD] [--priority LEVEL] [--status STATUS] ID
+  update [--title TEXT] [--description TEXT] [--due YYYY-MM-DD] [--priority LEVEL] [--status STATUS] ID
   complete ID
   delete ID
   export [--output tasks.csv] [--status STATUS] [--priority LEVEL] [--sort FIELD]
@@ -54,12 +55,14 @@ func Run(args []string, out, errOut io.Writer) error {
 	command := args[0]
 	fs := flag.NewFlagSet(command, flag.ContinueOnError)
 	fs.SetOutput(errOut)
-	var title, due, priority, status, sort, output string
+	var title, description, due, priority, status, sort, output string
 	switch command {
 	case "add":
+		fs.StringVar(&description, "description", "", "optional multiline task description")
 		fs.StringVar(&due, "due", "", "due date (YYYY-MM-DD)")
 		fs.StringVar(&priority, "priority", "medium", "low, medium, or high")
 	case "update":
+		fs.StringVar(&description, "description", "", "new description; empty clears it")
 		fs.StringVar(&title, "title", "", "new title")
 		fs.StringVar(&due, "due", "", "due date (YYYY-MM-DD); empty clears it")
 		fs.StringVar(&priority, "priority", "", "low, medium, or high")
@@ -71,7 +74,7 @@ func Run(args []string, out, errOut io.Writer) error {
 		if command == "export" {
 			fs.StringVar(&output, "output", "tasks.csv", "new CSV file path (must not already exist)")
 		}
-	case "complete", "delete", "tui":
+	case "complete", "delete", "show", "tui":
 	default:
 		return fmt.Errorf("unknown command %q; run tmig --help", command)
 	}
@@ -83,7 +86,7 @@ func Run(args []string, out, errOut io.Writer) error {
 	commandArgs := args[1:]
 	// flag stops at the first positional argument. Also accept the natural
 	// 'add TITLE --due DATE' and 'update ID --title TITLE' command forms.
-	if command == "add" || command == "update" || command == "complete" || command == "delete" {
+	if command == "add" || command == "update" || command == "complete" || command == "delete" || command == "show" {
 		if len(commandArgs) > 0 && !strings.HasPrefix(commandArgs[0], "-") {
 			commandArgs = append(append([]string{}, commandArgs[1:]...), commandArgs[0])
 		}
@@ -95,14 +98,14 @@ func Run(args []string, out, errOut io.Writer) error {
 		return err
 	}
 	wantArgs := 0
-	if command == "add" || command == "update" || command == "complete" || command == "delete" {
+	if command == "add" || command == "update" || command == "complete" || command == "delete" || command == "show" {
 		wantArgs = 1
 	}
 	if fs.NArg() != wantArgs {
 		return fmt.Errorf("%s expects %d positional argument(s); run tmig %s --help", command, wantArgs, command)
 	}
 	var id int64
-	if command == "update" || command == "complete" || command == "delete" {
+	if command == "update" || command == "complete" || command == "delete" || command == "show" {
 		var err error
 		id, err = strconv.ParseInt(fs.Arg(0), 10, 64)
 		if err != nil || id <= 0 {
@@ -129,11 +132,26 @@ func Run(args []string, out, errOut io.Writer) error {
 	case "tui":
 		return tui.Run(store)
 	case "add":
-		id, err := store.Add(fs.Arg(0), due, priority)
+		id, err := store.Add(fs.Arg(0), due, priority, description)
 		if err != nil {
 			return err
 		}
 		_, err = fmt.Fprintf(out, "Added task %d.\n", id)
+		return err
+	case "show":
+		item, err := store.Get(id)
+		if err != nil {
+			return fmt.Errorf("show task %d: %w", id, err)
+		}
+		due := item.Due
+		if due == "" {
+			due = "No deadline"
+		}
+		body := item.Description
+		if body == "" {
+			body = "No description."
+		}
+		_, err = fmt.Fprintf(out, "#%d %s\nStatus: %s | Priority: %s | Due: %s\n\n%s\n", item.ID, item.Title, item.Status, item.Priority, due, body)
 		return err
 	case "list", "export":
 		tasks, err := store.List(task.Filter{Status: status, Priority: priority, Sort: sort})
@@ -150,6 +168,8 @@ func Run(args []string, out, errOut io.Writer) error {
 			switch f.Name {
 			case "title":
 				changes.Title = &title
+			case "description":
+				changes.Description = &description
 			case "due":
 				changes.Due = &due
 			case "priority":
@@ -201,12 +221,12 @@ func exportCSV(path string, tasks []task.Task, out io.Writer) error {
 		return fmt.Errorf("create export: %w", err)
 	}
 	w := csv.NewWriter(f)
-	writeErr := w.Write([]string{"id", "title", "due", "priority", "status", "created_at"})
+	writeErr := w.Write([]string{"id", "title", "due", "priority", "status", "created_at", "description"})
 	for _, t := range tasks {
 		if writeErr != nil {
 			break
 		}
-		writeErr = w.Write([]string{strconv.FormatInt(t.ID, 10), t.Title, t.Due, t.Priority, t.Status, t.CreatedAt})
+		writeErr = w.Write([]string{strconv.FormatInt(t.ID, 10), t.Title, t.Due, t.Priority, t.Status, t.CreatedAt, t.Description})
 	}
 	w.Flush()
 	flushErr := w.Error()

@@ -1,6 +1,7 @@
 package task_test
 
 import (
+	"database/sql"
 	"errors"
 	"path/filepath"
 	"reflect"
@@ -11,6 +12,107 @@ import (
 
 	"github.com/Sinnaminty/tmig/internal/task"
 )
+
+func TestDescriptionMigrationPreservesLegacyTasks(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "legacy.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`CREATE TABLE tasks (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		title TEXT NOT NULL, due TEXT NOT NULL DEFAULT '',
+		priority TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
+		created_at TEXT NOT NULL
+	);
+	INSERT INTO tasks VALUES (7, 'Original task', '2026-09-21', 'high', 'complete', '2026-09-01T12:00:00Z');
+	INSERT INTO tasks VALUES (99, 'Deleted task', '', 'low', 'pending', '2026-09-01T12:00:00Z');
+	DELETE FROM tasks WHERE id = 99;`)
+	closeErr := db.Close()
+	if err != nil || closeErr != nil {
+		t.Fatalf("legacy setup: %v, %v", err, closeErr)
+	}
+	// Two simultaneous first opens must both succeed, without duplicate ALTERs.
+	results := make(chan error, 2)
+	for range 2 {
+		go func() {
+			s, err := task.Open(path)
+			if err == nil {
+				err = s.Close()
+			}
+			results <- err
+		}()
+	}
+	for range 2 {
+		if err := <-results; err != nil {
+			t.Fatal(err)
+		}
+	}
+	s := openStore(t, path)
+	want := task.Task{ID: 7, Title: "Original task", Due: "2026-09-21", Priority: "high", Status: "complete", CreatedAt: "2026-09-01T12:00:00Z"}
+	got, err := s.Get(7)
+	if err != nil || got != want {
+		t.Fatalf("migrated task = %+v, %v; want %+v", got, err, want)
+	}
+	if err := s.Update(7, task.Changes{Description: ptr("New description\nSecond line")}); err != nil {
+		t.Fatal(err)
+	}
+	if id := addTask(t, s, "Next", "", "medium"); id != 100 {
+		t.Fatalf("migration lost ID sequence: got %d", id)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened := openStore(t, path)
+	got, err = reopened.Get(7)
+	want.Description = "New description\nSecond line"
+	if err != nil || got != want {
+		t.Fatalf("reopened task = %+v, %v; want %+v", got, err, want)
+	}
+}
+
+func TestDescriptions(t *testing.T) {
+	t.Parallel()
+	s := newStore(t)
+	raw := "## Context\r\n\r\n- [ ] Review \"CSV\", café\r\n\tPreserve indentation\rLast line"
+	want := strings.ReplaceAll(strings.ReplaceAll(raw, "\r\n", "\n"), "\r", "\n")
+	id, err := s.Add("Issue", "", "medium", raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Get(id)
+	if err != nil || got.Description != want || listTasks(t, s)[0].Description != want {
+		t.Fatalf("description not preserved: %+v, %v", got, err)
+	}
+	if err := s.Update(id, task.Changes{Title: ptr("Renamed")}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.Get(id); err != nil || got.Description != want {
+		t.Fatalf("title update changed description: %+v, %v", got, err)
+	}
+	before := listTasks(t, s)
+	for _, invalid := range []string{"bad\x00text", "bad\x1b[2Jtext"} {
+		if _, err := s.Add("Invalid", "", "medium", invalid); err == nil {
+			t.Fatal("invalid description was added")
+		}
+		if err := s.Update(id, task.Changes{Title: ptr("Do not save"), Description: &invalid}); err == nil {
+			t.Fatal("invalid description was updated")
+		}
+		if got := listTasks(t, s); !reflect.DeepEqual(got, before) {
+			t.Fatal("invalid description changed stored data")
+		}
+	}
+	if err := s.Update(id, task.Changes{Description: ptr("")}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.Get(id); err != nil || got.Description != "" || got.Title != "Renamed" {
+		t.Fatalf("clear description: %+v, %v", got, err)
+	}
+	if _, err := s.Get(9999); !errors.Is(err, task.ErrNotFound) {
+		t.Fatalf("Get missing: %v", err)
+	}
+}
 
 func openStore(t *testing.T, path string) *task.Store {
 	t.Helper()
@@ -33,7 +135,7 @@ func newStore(t *testing.T) *task.Store {
 
 func addTask(t *testing.T, s *task.Store, title, due, priority string) int64 {
 	t.Helper()
-	id, err := s.Add(title, due, priority)
+	id, err := s.Add(title, due, priority, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +206,7 @@ func TestAddRejectsInvalidInput(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			s := newStore(t)
-			id, err := s.Add(tt.title, tt.due, tt.priority)
+			id, err := s.Add(tt.title, tt.due, tt.priority, "")
 			if err == nil || !strings.Contains(err.Error(), tt.message) || id != 0 {
 				t.Fatalf("Add = (%d, %v); want zero ID and %q error", id, err, tt.message)
 			}

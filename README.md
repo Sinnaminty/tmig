@@ -22,12 +22,14 @@ The examples below assume `bin` is on your `PATH`. You can also use
 ## Commands
 
 ```sh
-tmig add "Submit application" --due 2026-09-21 --priority high
+tmig add "Submit application" --due 2026-09-21 --priority high --description "Review the README and attach the repository link."
 tmig add "Read Go documentation"
+tmig show 1
 tmig list
 tmig list --status pending --priority high --sort due
 tmig update 1 --title "Review and submit application" --due 2026-09-22
 tmig update 1 --due ""
+tmig update 1 --description "Include the demo instructions and test results."
 tmig complete 1
 tmig update 1 --status pending
 tmig export --output application-tasks.csv --status pending --sort priority
@@ -43,6 +45,13 @@ For a title starting with a dash, use `tmig add -- "- my task"`.
 - Dates use `YYYY-MM-DD`. Past dates are allowed. A due date is a calendar date,
   with no time or time zone. Creation timestamps use UTC.
 - `update` changes only the supplied fields; `--due ""` removes a due date.
+- Tasks have an optional multiline description, similar to an issue body.
+  Use `--description TEXT` with `add` or `update`; `update ID --description ""`
+  clears it. Omitted descriptions are preserved during updates.
+- `show ID` displays the full task and description. `list` stays compact.
+  Descriptions preserve Markdown-style source text, including headings and
+  checklists, without rendering Markdown. Windows line endings are normalized
+  to newlines; other formatting and indentation are preserved.
 - `list` shows all tasks by default. Status and priority filters combine.
 - Sorting supports `id` (ascending), `due` (earliest first, undated tasks last),
   and `priority` (high first). Ties are ordered by ID.
@@ -52,6 +61,9 @@ For a title starting with a dash, use `tmig add -- "- my task"`.
 - Exports include a header and the same filters and sorting as `list`. They
   preserve title text and correctly quote commas and double quotes. Empty results
   produce a header-only file. Existing files are never overwritten.
+- CSV exports append a `description` column after `created_at`. Multiline
+  descriptions are quoted as a single field; use a CSV parser, since a record
+  may span several physical lines.
 - CSV is a data interchange format: when opening an export in spreadsheet
   software, import the title column as text to preserve literal values.
 - Invalid commands or failed operations return a nonzero exit code.
@@ -72,7 +84,8 @@ terminal at least 76 columns wide and 24 rows tall.
 | --- | --- |
 | Up / Down | Select a task |
 | `a` | Add a task |
-| Enter / `e` | Edit the selected task's title, due date, and priority |
+| Enter / `e` | Edit the selected task's title, due date, priority, and description |
+| `v` | Read the full description in a scrollable view |
 | Space | Complete or reopen the selected task |
 | `d` | Delete the selected task after confirmation (Cancel is selected first) |
 | `f` | Choose status/priority filters and sort order |
@@ -86,6 +99,10 @@ closes an open dropdown first). Blank due dates remove the deadline. Invalid
 input stays in the form with an error so you can correct it. Canceling a form
 discards its unsaved changes. CSV export remains available via `tmig export`.
 
+In the Description field, Enter inserts a new line and Tab moves to the Save
+button. In the reader (`v`), use Up / Down or PgUp / PgDn to scroll and Escape
+or `q` to return to the list. The details panel previews the description.
+
 The selected task's details appear beside the table in wide terminals and below
 it in narrower ones. The workspace stays centered on larger screens. Status and
 priority use distinct colors, and the header summarizes the tasks in the current
@@ -97,6 +114,11 @@ the filters form to see them.
 By default, the database is `tmig/tasks.db` inside the operating system's user
 configuration directory (for example, `~/.config/tmig/tasks.db` on Linux).
 It is shared across working directories and created on first use.
+
+Existing databases are upgraded automatically when opened by this version.
+The description column starts empty for older tasks; their IDs, titles, dates,
+priorities, statuses, and creation timestamps are preserved. Schema changes run
+in a transaction, including when two processes open an older database at once.
 
 Use a separate database for a demo or manual testing:
 
@@ -158,14 +180,16 @@ automatically. Tests do not use your normal task database.
 
 - `internal/task/store_test.go` checks persistence after reopening, validation,
   filters, sorting and tie order, partial updates, completion/reopening, deletion,
-  and errors that must leave existing data intact.
+  descriptions, legacy database migration, and errors that must leave existing
+  data intact.
 - `internal/cli/cli_test.go` checks command syntax, defaults, database selection,
   help, error reporting, CSV contents and escaping, and overwrite protection.
 - `main_test.go` runs the application entry point in subprocesses to check exit
   codes, stdout/stderr, and persistence between invocations.
 - `internal/tui/tui_test.go` sends keyboard events through the interface on a
   simulated terminal to check forms, validation, cancellation, completion,
-  deletion confirmation, filters, selection, refresh, and terminal resizing.
+  deletion confirmation, filters, selection, refresh, terminal resizing, and
+  multiline description editing and reading.
 
 The default storage location test uses Linux's `XDG_CONFIG_HOME` and is skipped
 on other operating systems. The other tests use explicit temporary database
@@ -205,3 +229,5 @@ normal task list. Each command starts a new process, which also checks persisten
 - [ ] Resize below 76 x 24 and back; confirm the resize message and restored UI.
 - [ ] Quit with `q` or Ctrl-C; confirm the terminal is restored and CLI commands
       see the changes saved in the TUI.
+- [ ] Add a multiline description, cancel an edit, then save a change. Inspect
+      it with `show ID`, the TUI reader (`v`), and CSV export.

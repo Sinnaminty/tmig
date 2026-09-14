@@ -129,6 +129,9 @@ func TestInvalidCommandsPreserveTasks(t *testing.T) {
 		{"extra title", "positional", []string{"add", "one", "two"}},
 		{"extra list argument", "positional", []string{"list", "extra"}},
 		{"missing ID", "positional", []string{"complete"}},
+		{"show missing ID", "positional", []string{"show"}},
+		{"show invalid ID", "positive integer", []string{"show", "abc"}},
+		{"show missing task", "task not found", []string{"show", "9999"}},
 		{"nonnumeric ID", "positive integer", []string{"delete", "abc"}},
 		{"zero ID", "positive integer", []string{"delete", "0"}},
 		{"negative ID", "positive integer", []string{"delete", "--", "-1"}},
@@ -227,15 +230,16 @@ func TestCSVExport(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	db := filepath.Join(dir, "tasks.db")
-	mustRun(t, db, "add", `Review "CSV", carefully`)
+	description := "## Context\nReview \"quotes\", commas, and café.\n\n- [ ] Verify export"
+	mustRun(t, db, "add", `Review "CSV", carefully`, "--description", description)
 	mustRun(t, db, "add", "Low task", "--priority", "low")
 	mustRun(t, db, "add", "Café review", "--priority", "high", "--due", "2026-09-21")
 	mustRun(t, db, "complete", "2")
 	tasks := snapshot(t, db)
-	header := []string{"id", "title", "due", "priority", "status", "created_at"}
-	medium := []string{"1", `Review "CSV", carefully`, "", "medium", "pending", tasks[0].CreatedAt}
-	low := []string{"2", "Low task", "", "low", "complete", tasks[1].CreatedAt}
-	high := []string{"3", "Café review", "2026-09-21", "high", "pending", tasks[2].CreatedAt}
+	header := []string{"id", "title", "due", "priority", "status", "created_at", "description"}
+	medium := []string{"1", `Review "CSV", carefully`, "", "medium", "pending", tasks[0].CreatedAt, description}
+	low := []string{"2", "Low task", "", "low", "complete", tasks[1].CreatedAt, ""}
+	high := []string{"3", "Café review", "2026-09-21", "high", "pending", tasks[2].CreatedAt, ""}
 	for _, tt := range []struct {
 		name string
 		args []string
@@ -281,6 +285,28 @@ func TestCSVExport(t *testing.T) {
 }
 
 type failingWriter struct{ err error }
+
+func TestDescriptionCommands(t *testing.T) {
+	t.Parallel()
+	db := filepath.Join(t.TempDir(), "tasks.db")
+	body := "## Context\n\n- [ ] Check the report\n- [ ] Submit the application"
+	mustRun(t, db, "add", "Issue", "--description", body)
+	if out := mustRun(t, db, "show", "1"); !strings.Contains(out, body) || !strings.Contains(out, "#1 Issue") {
+		t.Fatalf("show omitted task contents: %q", out)
+	}
+	mustRun(t, db, "update", "1", "--title", "Renamed")
+	if got := snapshot(t, db)[0].Description; got != body {
+		t.Fatalf("title update changed description: %q", got)
+	}
+	mustRun(t, db, "update", "--description", "Updated\nDescription", "1")
+	if out := mustRun(t, db, "show", "1"); !strings.Contains(out, "Updated\nDescription") {
+		t.Fatalf("show stale: %q", out)
+	}
+	mustRun(t, db, "update", "1", "--description", "")
+	if out := mustRun(t, db, "show", "1"); !strings.Contains(out, "No description.") {
+		t.Fatalf("clear failed: %q", out)
+	}
+}
 
 func (w failingWriter) Write(p []byte) (int, error) { return 0, w.err }
 

@@ -85,7 +85,7 @@ func (term *terminal) add(title, due string) {
 	term.text(title)
 	term.tabs(1)
 	term.text(due)
-	term.tabs(2)
+	term.tabs(3)
 	term.key(tcell.KeyEnter, 0)
 	if term.u.pages.HasPage("dialog") {
 		term.t.Fatalf("add did not close the form:\n%s", term.rendered())
@@ -127,7 +127,7 @@ func TestKeyboardTaskLifecycle(t *testing.T) {
 	term.key(tcell.KeyEnter, 0)
 	term.key(tcell.KeyDown, 0) // medium -> high
 	term.key(tcell.KeyEnter, 0)
-	term.tabs(1)
+	term.tabs(2)
 	term.key(tcell.KeyEnter, 0)
 	got := term.tasks()[0]
 	if got.Title != "a qe [red] task edited" || got.Due != "" || got.Priority != "high" || got.Status != "pending" {
@@ -163,10 +163,13 @@ func TestFormValidationAndCancellation(t *testing.T) {
 	term.tabs(1)
 	term.text("2026-02-30")
 	term.tabs(2)
+	term.text("Preserve this description")
+	term.tabs(1)
 	term.key(tcell.KeyEnter, 0)
 	if len(term.tasks()) != 0 || !term.u.pages.HasPage("dialog") || !strings.Contains(term.rendered(), "due date") {
 		t.Fatalf("invalid form was not retained with an error:\n%s", term.rendered())
 	}
+	term.key(tcell.KeyBacktab, 0)
 	term.key(tcell.KeyBacktab, 0)
 	term.key(tcell.KeyBacktab, 0) // Back to due date.
 	term.key(tcell.KeyEnd, 0)
@@ -174,10 +177,10 @@ func TestFormValidationAndCancellation(t *testing.T) {
 		term.key(tcell.KeyBackspace2, 0)
 	}
 	term.text("2026-02-28")
-	term.tabs(2)
+	term.tabs(3)
 	term.key(tcell.KeyEnter, 0)
 	before := term.tasks()
-	if len(before) != 1 || before[0].Title != "Keep this title" || before[0].Due != "2026-02-28" {
+	if len(before) != 1 || before[0].Title != "Keep this title" || before[0].Due != "2026-02-28" || before[0].Description != "Preserve this description" {
 		t.Fatalf("corrected form did not preserve input: %+v", before)
 	}
 	term.text("e")
@@ -188,7 +191,7 @@ func TestFormValidationAndCancellation(t *testing.T) {
 	}
 	term.text("a")
 	term.text("Discard new task")
-	term.tabs(4) // Cancel button.
+	term.tabs(5) // Cancel button.
 	term.key(tcell.KeyEnter, 0)
 	if got := term.tasks(); !reflect.DeepEqual(got, before) {
 		t.Fatal("Cancel saved a new task")
@@ -220,7 +223,7 @@ func TestFiltersSelectionAndRefresh(t *testing.T) {
 	if len(term.u.tasks) != 1 || term.u.tasks[0].Title != "Later" {
 		t.Fatal("completed task remained in pending filter")
 	}
-	if _, err := term.u.store.Add("External task", "", "high"); err != nil {
+	if _, err := term.u.store.Add("External task", "", "high", ""); err != nil {
 		t.Fatal(err)
 	}
 	term.text("r")
@@ -264,5 +267,62 @@ func TestSmallTerminalBlocksHiddenEdits(t *testing.T) {
 	term.u.app.ForceDraw()
 	if selected, ok := term.u.selected(); !ok || selected.Title != "Resized" || term.u.wide {
 		t.Fatal("switching layouts lost the selection or keyboard focus")
+	}
+}
+
+func TestMultilineDescriptionEditorAndReader(t *testing.T) {
+	t.Parallel()
+	term := newTerminal(t)
+	term.screen.SetSize(76, 24)
+	term.u.app.ForceDraw()
+	term.text("a")
+	term.text("Issue")
+	term.tabs(3)
+	term.text("## Context [red]")
+	term.key(tcell.KeyEnter, 0)
+	term.text("- [ ] Verify the report")
+	term.tabs(1)
+	term.key(tcell.KeyEnter, 0)
+	want := "## Context [red]\n- [ ] Verify the report"
+	items := term.tasks()
+	if len(items) != 1 || items[0].Description != want {
+		t.Fatalf("multiline add: %+v", items)
+	}
+	term.text("v")
+	if !strings.Contains(term.rendered(), "## Context [red]") || !strings.Contains(term.rendered(), "- [ ] Verify the report") {
+		t.Fatalf("reader did not display literal description:\n%s", term.rendered())
+	}
+	term.key(tcell.KeyEscape, 0)
+	term.text("e")
+	term.tabs(3)
+	term.key(tcell.KeyEnd, 0)
+	term.text(" edited")
+	term.key(tcell.KeyEscape, 0)
+	if got := term.tasks()[0].Description; got != want {
+		t.Fatal("cancel saved a description edit")
+	}
+	term.text("e")
+	term.tabs(3)
+	term.key(tcell.KeyEnd, 0)
+	term.text(" edited")
+	term.tabs(1)
+	term.key(tcell.KeyEnter, 0)
+	if got := term.tasks()[0].Description; !strings.Contains(got, " edited") {
+		t.Fatalf("description edit not saved: %q", got)
+	}
+	long := strings.Repeat("Description line\n", 40) + "Final line"
+	if err := term.u.store.Update(items[0].ID, task.Changes{Description: &long}); err != nil {
+		t.Fatal(err)
+	}
+	term.text("rv")
+	for range 5 {
+		term.key(tcell.KeyPgDn, 0)
+	}
+	if !strings.Contains(term.rendered(), "Final line") {
+		t.Fatal("reader could not scroll to end of description")
+	}
+	term.text("q")
+	if term.u.pages.HasPage("dialog") {
+		t.Fatal("q did not close reader")
 	}
 }

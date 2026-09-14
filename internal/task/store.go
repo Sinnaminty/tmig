@@ -2,6 +2,7 @@
 package task
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -17,12 +18,13 @@ import (
 var ErrNotFound = errors.New("task not found")
 
 type Task struct {
-	ID        int64
-	Title     string
-	Due       string
-	Priority  string
-	Status    string
-	CreatedAt string
+	ID          int64
+	Title       string
+	Description string
+	Due         string
+	Priority    string
+	Status      string
+	CreatedAt   string
 }
 
 type Filter struct {
@@ -33,10 +35,11 @@ type Filter struct {
 
 // Changes uses pointers to distinguish an omitted field from an empty due date.
 type Changes struct {
-	Title    *string
-	Due      *string
-	Priority *string
-	Status   *string
+	Title       *string
+	Description *string
+	Due         *string
+	Priority    *string
+	Status      *string
 }
 
 type Store struct {
@@ -55,20 +58,49 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
-	_, err = db.Exec(`PRAGMA busy_timeout = 5000;
-		CREATE TABLE IF NOT EXISTS tasks (
+	if err := initialize(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("initialize database: %w", err)
+	}
+	return &Store{db: db}, nil
+}
+
+// Serialize schema changes so two CLI processes can safely open an old database
+// at the same time. Existing rows receive an empty description.
+func initialize(db *sql.DB) error {
+	ctx := context.Background()
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, "PRAGMA busy_timeout = 5000; BEGIN IMMEDIATE"); err != nil {
+		return err
+	}
+	defer conn.ExecContext(ctx, "ROLLBACK")
+	_, err = conn.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS tasks (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			title TEXT NOT NULL CHECK (length(trim(title)) > 0),
+			description TEXT NOT NULL DEFAULT '',
 			due TEXT NOT NULL DEFAULT '',
 			priority TEXT NOT NULL CHECK (priority IN ('low', 'medium', 'high')),
 			status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'complete')),
 			created_at TEXT NOT NULL
 		)`)
 	if err != nil {
-		db.Close()
-		return nil, fmt.Errorf("initialize database: %w", err)
+		return err
 	}
-	return &Store{db: db}, nil
+	var hasDescription int
+	if err := conn.QueryRowContext(ctx, "SELECT count(*) FROM pragma_table_info('tasks') WHERE name = 'description'").Scan(&hasDescription); err != nil {
+		return err
+	}
+	if hasDescription == 0 {
+		if _, err := conn.ExecContext(ctx, "ALTER TABLE tasks ADD COLUMN description TEXT NOT NULL DEFAULT ''"); err != nil {
+			return err
+		}
+	}
+	_, err = conn.ExecContext(ctx, "COMMIT")
+	return err
 }
 
 func (s *Store) Close() error { return s.db.Close() }
@@ -108,7 +140,17 @@ func validateStatus(status string) error {
 	return nil
 }
 
-func (s *Store) Add(title, due, priority string) (int64, error) {
+func normalizeDescription(description string) (string, error) {
+	description = strings.ReplaceAll(strings.ReplaceAll(description, "\r\n", "\n"), "\r", "\n")
+	if strings.ContainsFunc(description, func(r rune) bool {
+		return unicode.IsControl(r) && r != '\n' && r != '\t'
+	}) {
+		return "", errors.New("description must not contain control characters other than newlines and tabs")
+	}
+	return description, nil
+}
+
+func (s *Store) Add(title, due, priority, description string) (int64, error) {
 	title = strings.TrimSpace(title)
 	if err := validateTitle(title); err != nil {
 		return 0, err
@@ -119,16 +161,30 @@ func (s *Store) Add(title, due, priority string) (int64, error) {
 	if err := validatePriority(priority); err != nil {
 		return 0, err
 	}
-	result, err := s.db.Exec(`INSERT INTO tasks (title, due, priority, created_at)
-		VALUES (?, ?, ?, ?)`, title, due, priority, time.Now().UTC().Format(time.RFC3339))
+	description, err := normalizeDescription(description)
+	if err != nil {
+		return 0, err
+	}
+	result, err := s.db.Exec(`INSERT INTO tasks (title, due, priority, description, created_at)
+		VALUES (?, ?, ?, ?, ?)`, title, due, priority, description, time.Now().UTC().Format(time.RFC3339))
 	if err != nil {
 		return 0, err
 	}
 	return result.LastInsertId()
 }
 
+func (s *Store) Get(id int64) (Task, error) {
+	var t Task
+	err := s.db.QueryRow(`SELECT id, title, due, priority, status, created_at, description FROM tasks WHERE id = ?`, id).
+		Scan(&t.ID, &t.Title, &t.Due, &t.Priority, &t.Status, &t.CreatedAt, &t.Description)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Task{}, ErrNotFound
+	}
+	return t, err
+}
+
 func (s *Store) List(filter Filter) ([]Task, error) {
-	query := `SELECT id, title, due, priority, status, created_at FROM tasks WHERE 1 = 1`
+	query := `SELECT id, title, due, priority, status, created_at, description FROM tasks WHERE 1 = 1`
 	var args []any
 	if filter.Status != "" && filter.Status != "all" {
 		if err := validateStatus(filter.Status); err != nil {
@@ -163,7 +219,7 @@ func (s *Store) List(filter Filter) ([]Task, error) {
 	var tasks []Task
 	for rows.Next() {
 		var t Task
-		if err := rows.Scan(&t.ID, &t.Title, &t.Due, &t.Priority, &t.Status, &t.CreatedAt); err != nil {
+		if err := rows.Scan(&t.ID, &t.Title, &t.Due, &t.Priority, &t.Status, &t.CreatedAt, &t.Description); err != nil {
 			return nil, err
 		}
 		tasks = append(tasks, t)
@@ -202,6 +258,14 @@ func (s *Store) Update(id int64, changes Changes) error {
 		}
 		fields = append(fields, "status = ?")
 		args = append(args, *changes.Status)
+	}
+	if changes.Description != nil {
+		description, err := normalizeDescription(*changes.Description)
+		if err != nil {
+			return err
+		}
+		fields = append(fields, "description = ?")
+		args = append(args, description)
 	}
 	if len(fields) == 0 {
 		return errors.New("provide at least one field to update")

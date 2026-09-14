@@ -60,7 +60,7 @@ func newUI(store *task.Store) (*ui, error) {
 	u.message.SetBackgroundColor(color(background))
 	footer := tview.NewTextView().SetDynamicColors(true).SetText(
 		"[" + accent + "]↑↓[-] Move   [" + accent + "]a[-] Add   [" + accent + "]Enter[-] Edit   [" + accent + "]Space[-] Complete / reopen\n" +
-			"[" + accent + "]f[-] Filter / sort   [" + accent + "]d[-] Delete   [" + accent + "]r[-] Refresh   [" + accent + "]q[-] Quit")
+			"[" + accent + "]v[-] Read   [" + accent + "]f[-] Filter / sort   [" + accent + "]d[-] Delete   [" + accent + "]r[-] Refresh   [" + accent + "]q[-] Quit")
 	footer.SetTextColor(color(muted)).SetBackgroundColor(color(background))
 	body := tview.NewFlex()
 	body.SetBackgroundColor(color(background))
@@ -147,14 +147,19 @@ func (u *ui) showDetail() {
 			due = "No deadline"
 		}
 		title := tview.Escape(selected.Title)
+		description := tview.Escape(selected.Description)
+		if description == "" {
+			description = "No description."
+		}
 		if u.wide {
 			u.detail.SetText(fmt.Sprintf(
-				"\n[%s]TASK #%d[-]\n\n[%s::b]%s[-::-]\n\n[%s]STATUS[-]\n[%s]%s[-]\n\n[%s]PRIORITY[-]\n[#%06x]%s[-]\n\n[%s]DUE DATE[-]\n%s\n\n[%s]Enter to edit\nSpace to complete / reopen[-]",
-				muted, selected.ID, foreground, title, muted, statusColor, status,
-				muted, priorityColor(selected.Priority).Hex(), strings.ToUpper(selected.Priority), muted, due, muted))
+				"\n[%s]TASK #%d[-]\n[%s::b]%s[-::-]\n\n[%s]%s[-] · [#%06x]%s[-]\n[%s]DUE DATE[-]  %s\n\n[%s]DESCRIPTION · v to read[-]\n\n%s",
+				muted, selected.ID, foreground, title, statusColor, status,
+				priorityColor(selected.Priority).Hex(), strings.ToUpper(selected.Priority), muted, due, muted, description))
 		} else {
-			u.detail.SetText(fmt.Sprintf("[%s::b]#%d  %s[-::-]\n[%s]%s[-]  ·  %s priority  ·  %s", foreground, selected.ID, title, statusColor, status, selected.Priority, due))
+			u.detail.SetText(fmt.Sprintf("[%s::b]#%d  %s[-::-]\n[%s]%s[-] · %s · %s · v to read\n%s", foreground, selected.ID, title, statusColor, status, selected.Priority, due, description))
 		}
+		u.detail.ScrollToBeginning()
 	} else {
 		u.detail.SetText("[" + foreground + "]No matching tasks[-]\n[" + muted + "]Press a to add a task or f to change filters.[-]")
 	}
@@ -244,6 +249,10 @@ func (u *ui) handleKey(event *tcell.EventKey) *tcell.EventKey {
 		if ok {
 			u.edit(&selected)
 		}
+	case 'v':
+		if ok {
+			u.read(selected)
+		}
 	case ' ':
 		if ok {
 			status := "complete"
@@ -277,11 +286,15 @@ func (u *ui) showForm(title string, form *tview.Form, message *tview.TextView) {
 	message.SetBackgroundColor(color(panel))
 	message.SetTextColor(color(muted))
 	form.SetCancelFunc(u.closeDialog)
+	height := 8 // Borders, buttons, and the three-line help/error area.
+	for index := 0; index < form.GetFormItemCount(); index++ {
+		height += form.GetFormItem(index).GetFieldHeight() + 1
+	}
 	content := tview.NewFlex().SetDirection(tview.FlexRow).
 		AddItem(form, 0, 1, true).AddItem(message, 3, 0, false)
 	centered := tview.NewFlex().AddItem(nil, 0, 1, false).
 		AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
-			AddItem(nil, 0, 1, false).AddItem(content, 14, 0, true).
+			AddItem(nil, 0, 1, false).AddItem(content, height, 0, true).
 			AddItem(nil, 0, 1, false), 72, 0, true).
 		AddItem(nil, 0, 1, false)
 	u.pages.AddPage("dialog", centered, true, true)
@@ -299,18 +312,20 @@ func (u *ui) edit(existing *task.Task) {
 	form := tview.NewForm().
 		AddInputField("Title", item.Title, 48, nil, nil).
 		AddInputField("Due (YYYY-MM-DD)", item.Due, 12, nil, nil).
-		AddDropDown("Priority", priorities, slices.Index(priorities, item.Priority), nil)
-	message := tview.NewTextView().SetText(" Blank due date means no deadline. Tab: next field. Esc: cancel.")
+		AddDropDown("Priority", priorities, slices.Index(priorities, item.Priority), nil).
+		AddTextArea("Description", item.Description, 48, 4, 0, nil)
+	message := tview.NewTextView().SetText(" Description: Enter adds a line. Tab: next field. Esc: cancel.\n Blank due date means no deadline.")
 	form.AddButton("Save", func() {
 		title := form.GetFormItem(0).(*tview.InputField).GetText()
 		due := form.GetFormItem(1).(*tview.InputField).GetText()
 		_, priority := form.GetFormItem(2).(*tview.DropDown).GetCurrentOption()
+		description := form.GetFormItem(3).(*tview.TextArea).GetText()
 		id := item.ID
 		var err error
 		if existing == nil {
-			id, err = u.store.Add(title, due, priority)
+			id, err = u.store.Add(title, due, priority, description)
 		} else {
-			err = u.store.Update(id, task.Changes{Title: &title, Due: &due, Priority: &priority})
+			err = u.store.Update(id, task.Changes{Title: &title, Due: &due, Priority: &priority, Description: &description})
 		}
 		if err != nil {
 			message.SetTextColor(color(red)).SetText(" " + err.Error())
@@ -323,6 +338,37 @@ func (u *ui) edit(existing *task.Task) {
 		}
 	}).AddButton("Cancel", u.closeDialog)
 	u.showForm(caption, form, message)
+}
+
+func (u *ui) read(item task.Task) {
+	body := item.Description
+	if body == "" {
+		body = "No description."
+	}
+	// Keep user text literal, including Markdown and strings resembling color tags.
+	view := tview.NewTextView().SetWrap(true).SetTextColor(color(foreground)).
+		SetText(fmt.Sprintf("%s\n\n%s", item.Title, body))
+	stylePanel(view.Box, fmt.Sprintf(" TASK #%d · DESCRIPTION ", item.ID))
+	view.SetBackgroundColor(color(panel))
+	view.SetBorderPadding(1, 1, 1, 1)
+	view.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event.Key() == tcell.KeyEscape || (event.Key() == tcell.KeyRune && event.Rune() == 'q') {
+			u.closeDialog()
+			return nil
+		}
+		return event
+	})
+	help := tview.NewTextView().SetTextColor(color(muted)).SetText(" Up/Down or PgUp/PgDn: scroll · Esc/q: back")
+	help.SetBackgroundColor(color(panel))
+	content := tview.NewFlex().SetDirection(tview.FlexRow).
+		AddItem(view, 0, 1, true).AddItem(help, 1, 0, false)
+	centered := tview.NewFlex().AddItem(nil, 0, 1, false).
+		AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
+			AddItem(nil, 0, 1, false).AddItem(content, 20, 0, true).
+			AddItem(nil, 0, 1, false), 72, 0, true).
+		AddItem(nil, 0, 1, false)
+	u.pages.AddPage("dialog", centered, true, true)
+	u.app.SetFocus(view)
 }
 
 func (u *ui) confirmDelete(item task.Task) {
