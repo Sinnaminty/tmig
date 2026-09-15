@@ -1,6 +1,7 @@
-# tmig — Task Manager In Go
+# tmig: Task Manager In Go
 
 Project submission for [ChannelBound, LLC - Junior Developer & Data Analyst](https://www.indeed.com/viewjob?jk=7b37d65ed238eaa3&from=shareddesktop_copy).
+https://github.com/user-attachments/assets/93a00c11-876a-4992-8939-d6b46f673536
 
 Implements **Option E: CLI Task Manager with SQLite Backend**, including all three
 bonus features: automated tests, data validation, and a tui written with tview.
